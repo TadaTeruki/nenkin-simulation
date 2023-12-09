@@ -14,10 +14,17 @@ impl Site {
     pub fn squared_distance(&self, other: &Site) -> f64 {
         (self.x - other.x).powi(2) + (self.y - other.y).powi(2)
     }
+
+    pub fn dot(&self, other: &Site) -> f64 {
+        self.x * other.x + self.y * other.y
+    }
 }
 
 impl From<Site> for Point {
     fn from(site: Site) -> Self {
-        Point { x: site.x, y: site.y }
+        Point {
+            x: site.x,
+            y: site.y,
+        }
     }
 }

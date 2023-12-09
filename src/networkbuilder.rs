@@ -33,6 +33,57 @@ impl NetworkBuilder {
         }
     }
 
+    pub fn add_edge_sites(self, edge_num_x: Option<usize>, edge_num_y: Option<usize>) -> Self {
+        let corners = [
+            Site { x: 0., y: 0. },
+            Site {
+                x: 0.,
+                y: self.bound_max.y,
+            },
+            Site {
+                x: self.bound_max.x,
+                y: self.bound_max.y,
+            },
+            Site {
+                x: self.bound_max.x,
+                y: 0.,
+            },
+        ];
+        let edge_sites = corners
+            .iter()
+            .enumerate()
+            .flat_map(|(i, corner)| {
+                let next = &corners[(i + 1) % corners.len()];
+                let edge_num = if i % 2 == 1 {
+                    edge_num_x.unwrap_or(
+                        (self.sites.len() as f64 / self.bound_max.y * self.bound_max.x).sqrt()
+                            as usize,
+                    )
+                } else {
+                    edge_num_y.unwrap_or(
+                        (self.sites.len() as f64 / self.bound_max.x * self.bound_max.y).sqrt()
+                            as usize,
+                    )
+                };
+                let mut edge_sites = Vec::with_capacity(edge_num);
+                for j in 0..edge_num {
+                    let t = j as f64 / edge_num as f64;
+                    let point = Site {
+                        x: corner.x * (1.0 - t) + next.x * t,
+                        y: corner.y * (1.0 - t) + next.y * t,
+                    };
+                    edge_sites.push(point);
+                }
+                edge_sites
+            })
+            .collect::<Vec<_>>();
+
+        Self {
+            sites: self.sites.into_iter().chain(edge_sites).collect::<Vec<_>>(),
+            ..self
+        }
+    }
+
     pub fn relaxate_sites(self, times: usize) -> Option<NetworkBuilder> {
         if times == 0 {
             return Some(self);
@@ -114,7 +165,7 @@ impl NetworkBuilder {
                 }
                 graph
             };
-            Some(Network::new(sites, graph))
+            Network::new(sites, graph)
         } else {
             None
         }
