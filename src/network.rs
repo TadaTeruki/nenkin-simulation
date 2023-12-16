@@ -3,14 +3,18 @@ use crate::{
     types::{NumericProperty, Property, State},
 };
 use kiddo::{ImmutableKdTree, SquaredEuclidean};
+use naturalneighbor::Interpolator;
 use terrain_graph::undirected::UndirectedGraph;
 use wasm_bindgen::prelude::*;
 
+type CachedWeight = Option<Vec<(usize, f64)>>;
 #[wasm_bindgen]
 pub struct Network {
     sites: Vec<Site>,
     props: Vec<Property>,
     graph: UndirectedGraph,
+    interp: Interpolator,
+    weights_cache: Vec<Option<CachedWeight>>,
     kdtree: ImmutableKdTree<f64, 2>,
     lifetime: Option<usize>,
 }
@@ -25,7 +29,7 @@ impl Network {
             };
             sites.len()
         ];
-
+        let interp = Interpolator::new(&sites);
         let kdtree = ImmutableKdTree::new_from_slice(
             &sites
                 .iter()
@@ -37,6 +41,8 @@ impl Network {
             sites,
             props,
             graph,
+            interp,
+            weights_cache: vec![],
             kdtree,
             lifetime: None,
         })
@@ -198,11 +204,51 @@ impl Network {
         let nearest = self.kdtree.nearest_one::<SquaredEuclidean>(&[x, y]);
         Some(nearest.item as usize)
     }
-
-    #[wasm_bindgen]
-    pub fn get_property(&mut self, idx: usize) -> Option<NumericProperty> {
-        self.props
-            .get(idx)
-            .map(|prop| NumericProperty::from(prop.clone()))
+    pub fn get_property(
+        &mut self,
+        x: f64,
+        y: f64,
+        cache_key: Option<usize>,
+    ) -> Option<NumericProperty> {
+        let site = Site { x, y };
+        if let Some(key) = cache_key {
+            if key >= self.weights_cache.len() {
+                self.weights_cache.resize(key + 1, None);
+            }
+            if let Some(cache) = &self.weights_cache[key] {
+                if let Some(cache) = cache {
+                    let mut property: Option<NumericProperty> = None;
+                    for (idx, weight) in cache {
+                        let other = NumericProperty::from(self.props[*idx].clone());
+                        if let Some(prop) = property {
+                            property = Some(prop.add(&other.mul_scala(*weight)));
+                        } else {
+                            property = Some(other.mul_scala(*weight));
+                        }
+                    }
+                    return property;
+                } else {
+                    return None;
+                }
+            }
+        }
+        let weights = self.interp.query_weights(site.clone());
+        if let Some(key) = cache_key {
+            self.weights_cache[key] = Some(weights.clone());
+        }
+        if let Some(weights) = weights {
+            return weights
+                .iter()
+                .map(|(i, w)| NumericProperty::from(self.props[*i].clone()).mul_scala(*w))
+                .fold(None, |acc, x| {
+                    if let Some(acc) = acc {
+                        Some(acc.add(&x))
+                    } else {
+                        Some(x)
+                    }
+                });
+        } else {
+            None
+        }
     }
 }
