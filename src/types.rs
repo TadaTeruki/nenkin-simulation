@@ -35,26 +35,6 @@ impl Lerpable for NumericProperty {
     }
 }
 
-impl NumericProperty {
-    pub(super) fn add(&self, other: &Self) -> Self {
-        Self {
-            state_none: self.state_none + other.state_none,
-            state_live: self.state_live + other.state_live,
-            state_path: self.state_path + other.state_path,
-            state_dead: self.state_dead + other.state_dead,
-        }
-    }
-
-    pub(super) fn mul_scala(&self, other: f64) -> Self {
-        Self {
-            state_none: self.state_none * other,
-            state_live: self.state_live * other,
-            state_path: self.state_path * other,
-            state_dead: self.state_dead * other,
-        }
-    }
-}
-
 impl From<Property> for NumericProperty {
     fn from(prop: Property) -> Self {
         let mut state_none = 0.0;

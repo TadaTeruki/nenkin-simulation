@@ -2,20 +2,16 @@ use crate::{
     core::Site,
     types::{NumericProperty, Property, State},
 };
-use kdtree::{distance::squared_euclidean, KdTree};
-use naturalneighbor::Interpolator;
+use kiddo::{ImmutableKdTree, SquaredEuclidean};
 use terrain_graph::undirected::UndirectedGraph;
 use wasm_bindgen::prelude::*;
 
-type CachedWeight = Option<Vec<(usize, f64)>>;
 #[wasm_bindgen]
 pub struct Network {
     sites: Vec<Site>,
     props: Vec<Property>,
     graph: UndirectedGraph,
-    interp: Interpolator,
-    weights_cache: Vec<Option<CachedWeight>>,
-    kdtree: KdTree<f64, usize, [f64; 2]>,
+    kdtree: ImmutableKdTree<f64, 2>,
     lifetime: Option<usize>,
 }
 
@@ -29,49 +25,42 @@ impl Network {
             };
             sites.len()
         ];
-        let interp = Interpolator::new(&sites);
-        let mut kd_tree = KdTree::with_capacity(2, sites.len());
-        for (idx, site) in sites.iter().enumerate() {
-            let res = kd_tree.add([site.x, site.y], idx);
-            if res.is_err() {
-                return None;
-            }
-        }
+
+        let kdtree = ImmutableKdTree::new_from_slice(
+            &sites
+                .iter()
+                .map(|site| [site.x, site.y])
+                .collect::<Vec<_>>(),
+        );
 
         Some(Network {
             sites,
             props,
             graph,
-            interp,
-            weights_cache: vec![],
-            kdtree: kd_tree,
+            kdtree,
             lifetime: None,
         })
     }
 
     pub fn set_start(self, x: f64, y: f64) -> Self {
-        let nearest = self.kdtree.nearest(&[x, y], 1, &squared_euclidean);
-        if let Ok(nearest) = nearest {
-            Self {
-                props: self
-                    .props
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, prop)| {
-                        if idx == *nearest[0].1 {
-                            Property {
-                                state: State::Live(0),
-                                parent: None,
-                            }
-                        } else {
-                            prop.clone()
+        let nearest = self.kdtree.nearest_one::<SquaredEuclidean>(&[x, y]);
+        Self {
+            props: self
+                .props
+                .iter()
+                .enumerate()
+                .map(|(idx, prop)| {
+                    if idx == nearest.item as usize {
+                        Property {
+                            state: State::Live(0),
+                            parent: None,
                         }
-                    })
-                    .collect(),
-                ..self
-            }
-        } else {
-            self
+                    } else {
+                        prop.clone()
+                    }
+                })
+                .collect(),
+            ..self
         }
     }
 
@@ -204,51 +193,16 @@ impl Network {
         true
     }
 
-    pub fn get_property(
-        &mut self,
-        x: f64,
-        y: f64,
-        cache_key: Option<usize>,
-    ) -> Option<NumericProperty> {
-        let site = Site { x, y };
-        if let Some(key) = cache_key {
-            if key >= self.weights_cache.len() {
-                self.weights_cache.resize(key + 1, None);
-            }
-            if let Some(cache) = &self.weights_cache[key] {
-                if let Some(cache) = cache {
-                    let mut property: Option<NumericProperty> = None;
-                    for (idx, weight) in cache {
-                        let other = NumericProperty::from(self.props[*idx].clone());
-                        if let Some(prop) = property {
-                            property = Some(prop.add(&other.mul_scala(*weight)));
-                        } else {
-                            property = Some(other.mul_scala(*weight));
-                        }
-                    }
-                    return property;
-                } else {
-                    return None;
-                }
-            }
-        }
-        let weights = self.interp.query_weights(site.clone());
-        if let Some(key) = cache_key {
-            self.weights_cache[key] = Some(weights.clone());
-        }
-        if let Some(weights) = weights {
-            return weights
-                .iter()
-                .map(|(i, w)| NumericProperty::from(self.props[*i].clone()).mul_scala(*w))
-                .fold(None, |acc, x| {
-                    if let Some(acc) = acc {
-                        Some(acc.add(&x))
-                    } else {
-                        Some(x)
-                    }
-                });
-        } else {
-            None
-        }
+    #[wasm_bindgen]
+    pub fn get_nearest_site(&self, x: f64, y: f64) -> Option<usize> {
+        let nearest = self.kdtree.nearest_one::<SquaredEuclidean>(&[x, y]);
+        Some(nearest.item as usize)
+    }
+
+    #[wasm_bindgen]
+    pub fn get_property(&mut self, idx: usize) -> Option<NumericProperty> {
+        self.props
+            .get(idx)
+            .map(|prop| NumericProperty::from(prop.clone()))
     }
 }
