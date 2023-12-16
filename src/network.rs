@@ -2,7 +2,7 @@ use crate::{
     core::Site,
     types::{NumericProperty, Property, State},
 };
-use kdtree::{distance::squared_euclidean, KdTree};
+use kiddo::{ImmutableKdTree, SquaredEuclidean};
 use naturalneighbor::Interpolator;
 use terrain_graph::undirected::UndirectedGraph;
 use wasm_bindgen::prelude::*;
@@ -15,7 +15,7 @@ pub struct Network {
     graph: UndirectedGraph,
     interp: Interpolator,
     weights_cache: Vec<Option<CachedWeight>>,
-    kdtree: KdTree<f64, usize, [f64; 2]>,
+    kdtree: ImmutableKdTree<f64, 2>,
     lifetime: Option<usize>,
 }
 
@@ -30,13 +30,12 @@ impl Network {
             sites.len()
         ];
         let interp = Interpolator::new(&sites);
-        let mut kd_tree = KdTree::with_capacity(2, sites.len());
-        for (idx, site) in sites.iter().enumerate() {
-            let res = kd_tree.add([site.x, site.y], idx);
-            if res.is_err() {
-                return None;
-            }
-        }
+        let kdtree = ImmutableKdTree::new_from_slice(
+            &sites
+                .iter()
+                .map(|site| [site.x, site.y])
+                .collect::<Vec<_>>(),
+        );
 
         Some(Network {
             sites,
@@ -44,34 +43,30 @@ impl Network {
             graph,
             interp,
             weights_cache: vec![],
-            kdtree: kd_tree,
+            kdtree,
             lifetime: None,
         })
     }
 
     pub fn set_start(self, x: f64, y: f64) -> Self {
-        let nearest = self.kdtree.nearest(&[x, y], 1, &squared_euclidean);
-        if let Ok(nearest) = nearest {
-            Self {
-                props: self
-                    .props
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, prop)| {
-                        if idx == *nearest[0].1 {
-                            Property {
-                                state: State::Live(0),
-                                parent: None,
-                            }
-                        } else {
-                            prop.clone()
+        let nearest = self.kdtree.nearest_one::<SquaredEuclidean>(&[x, y]);
+        Self {
+            props: self
+                .props
+                .iter()
+                .enumerate()
+                .map(|(idx, prop)| {
+                    if idx == nearest.item as usize {
+                        Property {
+                            state: State::Live(0),
+                            parent: None,
                         }
-                    })
-                    .collect(),
-                ..self
-            }
-        } else {
-            self
+                    } else {
+                        prop.clone()
+                    }
+                })
+                .collect(),
+            ..self
         }
     }
 
