@@ -199,6 +199,11 @@ impl Network {
         true
     }
 
+    #[wasm_bindgen]
+    pub fn get_nearest_site(&self, x: f64, y: f64) -> Option<usize> {
+        let nearest = self.kdtree.nearest_one::<SquaredEuclidean>(&[x, y]);
+        Some(nearest.item as usize)
+    }
     pub fn get_property(
         &mut self,
         x: f64,
