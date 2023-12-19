@@ -14,9 +14,22 @@ pub struct Network {
     props: Vec<Property>,
     graph: UndirectedGraph,
     interp: Interpolator,
-    weights_cache: Vec<Option<CachedWeight>>,
     kdtree: ImmutableKdTree<f64, 2>,
+    weights_cache: Vec<CachedWeight>,
     lifetime: Option<usize>,
+}
+
+#[wasm_bindgen]
+pub struct Weight {
+    pub index: usize,
+    pub weight: f64,
+}
+
+#[wasm_bindgen]
+impl Weight {
+    pub fn new(index: usize, weight: f64) -> Weight {
+        Weight { index, weight }
+    }
 }
 
 #[wasm_bindgen]
@@ -29,7 +42,7 @@ impl Network {
             };
             sites.len()
         ];
-        let interp = Interpolator::new(&sites);
+        let interp: Interpolator = Interpolator::new(&sites);
         let kdtree = ImmutableKdTree::new_from_slice(
             &sites
                 .iter()
@@ -48,33 +61,59 @@ impl Network {
         })
     }
 
-    pub fn set_start(self, x: f64, y: f64) -> Self {
-        let nearest = self.kdtree.nearest_one::<SquaredEuclidean>(&[x, y]);
-        Self {
-            props: self
-                .props
+    pub fn seartch_path(&self, from: usize, to: usize) -> Option<Vec<usize>> {
+        let mut current = from;
+        let mut path = vec![current];
+        while current != to {
+            let mut min_dist_to = f64::MAX;
+            let mut min_index = None;
+            self.graph
+                .neighbors_of(current)
                 .iter()
-                .enumerate()
-                .map(|(idx, prop)| {
-                    if idx == nearest.item as usize {
-                        Property {
-                            state: State::Live(0),
-                            parent: None,
-                        }
-                    } else {
-                        prop.clone()
+                .for_each(|neighbor| {
+                    let dist_to = self.sites[*neighbor].distance(&self.sites[to]);
+                    if min_dist_to > dist_to {
+                        min_dist_to = dist_to;
+                        min_index = Some(*neighbor);
                     }
-                })
-                .collect(),
-            ..self
+                });
+            if let Some(min_index) = min_index {
+                path.push(min_index);
+                current = min_index;
+            } else {
+                return None;
+            }
+        }
+        Some(path)
+    }
+
+    pub fn set_wall(&mut self, x: f64, y: f64, prev_x: f64, prev_y: f64) {
+        let nearest = self.kdtree.nearest_one::<SquaredEuclidean>(&[x, y]);
+        let prev_nearest = self
+            .kdtree
+            .nearest_one::<SquaredEuclidean>(&[prev_x, prev_y]);
+        let path = self.seartch_path(prev_nearest.item as usize, nearest.item as usize);
+        if let Some(path) = path {
+            path.iter().for_each(|idx| {
+                self.props[*idx] = Property {
+                    state: State::Wall,
+                    parent: None,
+                };
+            });
         }
     }
 
-    pub fn set_lifetime(self, lifetime: usize) -> Self {
-        Self {
-            lifetime: Some(lifetime),
-            ..self
-        }
+    pub fn set_start(&mut self, x: f64, y: f64) {
+        let nearest: kiddo::NearestNeighbour<f64, u64> =
+            self.kdtree.nearest_one::<SquaredEuclidean>(&[x, y]);
+        self.props[nearest.item as usize] = Property {
+            state: State::Live(0),
+            parent: None,
+        };
+    }
+
+    pub fn set_lifetime(&mut self, lifetime: usize) {
+        self.lifetime = Some(lifetime);
     }
 
     fn find_child(&self, idx: usize) -> Option<usize> {
@@ -180,6 +219,10 @@ impl Network {
                 state: State::Dead,
                 parent: None,
             },
+            State::Wall => Property {
+                state: State::Wall,
+                parent: None,
+            },
         }
     }
 
@@ -199,44 +242,20 @@ impl Network {
         true
     }
 
-    #[wasm_bindgen]
     pub fn get_nearest_site(&self, x: f64, y: f64) -> Option<usize> {
         let nearest = self.kdtree.nearest_one::<SquaredEuclidean>(&[x, y]);
         Some(nearest.item as usize)
     }
-    pub fn get_property(
-        &mut self,
-        x: f64,
-        y: f64,
-        cache_key: Option<usize>,
-    ) -> Option<NumericProperty> {
+
+    pub fn add_cache(&mut self, x: f64, y: f64) -> usize {
         let site = Site { x, y };
-        if let Some(key) = cache_key {
-            if key >= self.weights_cache.len() {
-                self.weights_cache.resize(key + 1, None);
-            }
-            if let Some(cache) = &self.weights_cache[key] {
-                if let Some(cache) = cache {
-                    let mut property: Option<NumericProperty> = None;
-                    for (idx, weight) in cache {
-                        let other = NumericProperty::from(self.props[*idx].clone());
-                        if let Some(prop) = property {
-                            property = Some(prop.add(&other.mul_scala(*weight)));
-                        } else {
-                            property = Some(other.mul_scala(*weight));
-                        }
-                    }
-                    return property;
-                } else {
-                    return None;
-                }
-            }
-        }
-        let weights = self.interp.query_weights(site.clone());
-        if let Some(key) = cache_key {
-            self.weights_cache[key] = Some(weights.clone());
-        }
-        if let Some(weights) = weights {
+        let weights = self.interp.query_weights(site);
+        self.weights_cache.push(weights);
+        self.weights_cache.len() - 1
+    }
+
+    pub fn get_property(&self, key: usize) -> Option<NumericProperty> {
+        if let Some(weights) = &self.weights_cache[key] {
             return weights
                 .iter()
                 .map(|(i, w)| NumericProperty::from(self.props[*i].clone()).mul_scala(*w))
